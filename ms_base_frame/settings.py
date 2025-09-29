@@ -28,7 +28,7 @@ SECRET_KEY = 'django-insecure-l&00w#zkysvd7_ols6uwh8$==+h4y7@%(3r8%2$7lk0a7^i1eb
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['3667c0f81b92.ngrok-free.app']
+ALLOWED_HOSTS = ['20edb9765387.ngrok-free.app']
 
 
 # Application definition
@@ -45,12 +45,12 @@ INSTALLED_APPS = [
     'base_app',
     'core',
     'django_filters',
+    'supervisor',
 
 
 ]
 
 MIDDLEWARE = [
-    
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -59,7 +59,12 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'base_app.middleware.TokenAuthMiddleware',
+    
+    # ✅ CORRECT ORDER - IMPORTANT:
+    'core.middleware.TenantMiddleware',                      # 1. Pehle Tenant
+    'base_app.middleware.AdminTokenAuthMiddleware',          # 2. Fir Admin
+    'base_app.middleware.SupervisorTokenAuthMiddleware',     # 3. Fir Supervisor (ADD THIS)
+    'base_app.middleware.TokenAuthMiddleware',               # 4. Last mein User
 ]
 
 ROOT_URLCONF = 'ms_base_frame.urls'
@@ -155,4 +160,7 @@ CORS_ALLOW_ALL_ORIGINS = True
 REST_FRAMEWORK = {
     'DEFAULT_FILTER_BACKENDS': ['django_filters.rest_framework.DjangoFilterBackend'],
 }
+
+# settings.py
+
 

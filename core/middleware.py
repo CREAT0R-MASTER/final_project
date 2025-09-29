@@ -1,6 +1,11 @@
 import threading
 from django.conf import settings
 
+from django.http import JsonResponse
+from django.utils.deprecation import MiddlewareMixin
+from .models import AdminToken  # Admin token model
+from django.urls import resolve
+
 _thread_locals = threading.local()
 
 def get_current_db():
@@ -35,3 +40,7 @@ class TenantMiddleware:
             }
 
         return self.get_response(request)
+
+
+
+

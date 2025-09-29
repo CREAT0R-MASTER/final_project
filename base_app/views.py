@@ -1,4 +1,5 @@
 import time
+import uuid
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view 
 from rest_framework.response import Response
@@ -7,17 +8,21 @@ from django.apps import apps
 from .models import *
 from .serializers import *
 from .helpers.utility import app_name, get_serializer_class, get_filtered_queryset, CustomPageNumberPagination
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.decorators import parser_classes
 from .helpers.auth_helper import generate_custom_tokens
 from django.contrib.auth.hashers import make_password, check_password
 
 from base_app.models import ComplaintCategory, ComplaintSubCategory, Zone, Ward
+from .constants import INDIA_STATES_CITIES
 from .models import UserToken, Complaint
 from .serializers import ComplaintSerializers
 from math import radians, cos, sin, asin, sqrt
 from django.core.mail import send_mail
 from django.conf import settings
 import random
-
+from django.http import JsonResponse
+from django.utils import timezone
 
 @api_view(['GET', 'POST', 'PUT', 'DELETE'])
 def manage_data(request, model_name, field=None, value=None, item_id=None):            
@@ -161,7 +166,7 @@ def login(request):
         userInstance = UserProfile.objects.filter(user_email=user_email).first()
         if userInstance and check_password(user_password, userInstance.password):
             UserToken.objects.filter(user=userInstance).delete()
-            tokens = generate_custom_tokens(userInstance)
+            tokens = generate_custom_tokens(userInstance, role="user")
 
 
             userSerilizer = UserProfileSerializers(userInstance)
@@ -177,7 +182,7 @@ def login(request):
 @api_view(['POST'])
 def signup(request):
     try:
-        user_id = request.data.get('user_id')
+        # user_id = request.data.get('user_id')
         created_by = request.data.get('created_by')  # Changed from created_by_ID
         updated_by = request.data.get('updated_by')  # Changed from updated_by_ID
         created_datetime = request.data.get('created_datetime')
@@ -208,7 +213,7 @@ def signup(request):
             return Response({'status': False, 'message': 'User already exists'}, status=status.HTTP_400_BAD_REQUEST)
 
         user = UserProfile.objects.create(
-            user_id=user_id,
+            # user_id=user_id,
             user_name=user_name,
             user_type="CITIZEN",  # Default to citizen
             user_email=user_email,
@@ -230,47 +235,25 @@ def signup(request):
     
     
     # User panel code
-
 @api_view(['GET'])
-def dropdown_values(request, dropdown_type):
-    try:
-        data = []
+def dropdown_common_api(request):
+    """
+    Returns all zones with wards and all categories with subcategories
+    """
+    zones = Zone.objects.all()
+    categories = ComplaintCategory.objects.all()
 
-        # Complaint Category
-        if dropdown_type == 'complaint_category':
-            values = ComplaintCategory.objects.filter(is_active=True)
-            data = [{'id': v.id, 'name': v.name} for v in values]
+    zones_data = ZoneSerializer(zones, many=True).data
+    categories_data = ComplaintCategorySerializer(categories, many=True).data
 
-        # Complaint SubCategory (category_id required)
-        elif dropdown_type == 'complaint_subcategory':
-            category_id = request.query_params.get('category_id')
-            if not category_id:
-                return Response({'status': False, 'message': 'category_id is required for subcategories'}, status=400)
-            values = ComplaintSubCategory.objects.filter(is_active=True, category_id=category_id)
-            data = [{'id': v.id, 'name': v.name} for v in values]
-
-        # Zone
-        elif dropdown_type == 'zone':
-            values = Zone.objects.filter(is_active=True)
-            data = [{'id': v.id, 'name': v.name} for v in values]
-
-        # Ward (zone_id required)
-        elif dropdown_type == 'ward':
-            zone_id = request.query_params.get('zone_id')
-            if not zone_id:
-                return Response({'status': False, 'message': 'zone_id is required for wards'}, status=400)
-            values = Ward.objects.filter(is_active=True, zone_id=zone_id)
-            data = [{'id': v.id, 'name': v.name} for v in values]
-
-        else:
-            return Response({'status': False, 'message': 'Invalid dropdown type'}, status=400)
-
-        return Response({'status': True, 'data': data}, status=200)
-
-    except Exception as e:
-        return Response({'status': False, 'message': str(e)}, status=500)
+    return Response({
+        'status': True,
+        'zones': zones_data,
+        'categories': categories_data
+    })
 
 @api_view(['POST'])
+@parser_classes([MultiPartParser, FormParser])
 def create_complaint(request):
     try:
         auth_header = request.headers.get('Authorization')
@@ -312,7 +295,7 @@ def create_complaint(request):
         
         # Validate ward based on selected zone
         ward_name = request.data.get('ward')
-        ward_instance = Ward.objects.filter(name=ward_name, zone=zone_instance, is_active=True).first()
+        ward_instance = Ward.objects.filter(name=ward_name, zone=zone_instance).first()
         if not ward_instance:
             return Response({'status': False, 'message': 'Invalid ward for selected zone'}, status=400)
 
@@ -329,7 +312,7 @@ def create_complaint(request):
         data['address1'] = user.address or ''
         data['area'] = user.city if user.city else 'N/A' 
         data['created_by'] = user.id
-
+     
         # Handle image upload
         complaint_image = request.FILES.get('complaint_image')
         if not complaint_image:
@@ -590,26 +573,46 @@ def nearby_complaints(request):
     # Handle Logout (Clears session)
 @api_view(['POST'])
 def logout(request):
-    auth_header = request.headers.get('Authorization')
-    if not auth_header:
-        return Response({'status': False, 'message': 'Authentication required'}, status=401)
-    
-    user_token = UserToken.objects.filter(access_token=auth_header).first()
-    if user_token:
-        user_token.delete()  # token ko delete kar do
-        return Response({'status': True, 'message': 'Logged out successfully'})
-    
-    return Response({'status': False, 'message': 'Invalid token'}, status=401)
+    try:
+        # Frontend se body me token aayega (key = token)
+        access_token = request.data.get("Authorization")
+
+        if not access_token:
+            return Response(
+                {"status": False, "message": "Token required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Token ko DB se find karo
+        user_token = UserToken.objects.filter(access_token=access_token).first()
+
+        if user_token:
+            user_token.delete()  # ✅ DB se token delete kar diya
+            return Response(
+                {"status": True, "message": "Logout successful"},
+                status=status.HTTP_200_OK
+            )
+
+        return Response(
+            {"status": False, "message": "Invalid token"},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+
+    except Exception as e:
+        return Response(
+            {"status": False, "message": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 # Forgot password 
 
-# In-memory OTP storage
-otp_store = {}
-verified_users = set()  # ✅ OTP verify hone ke baad yaha store karenge
+# In-memory stores
+otp_store = {}       # {email: (otp, expiry)}
+reset_tokens = {}    # {token: email}  # ✅ token system
 
 
-# Request OTP (Generate + Send Email)
+# ✅ STEP 1: Request OTP (by email)
 @api_view(['POST'])
 def request_otp(request):
     email = request.data.get("email")
@@ -621,12 +624,12 @@ def request_otp(request):
     if not user:
         return Response({"status": False, "message": "User not found"}, status=404)
 
-    # ✅ OTP generate
-    otp = random.randint(100000, 999999)
-    expiry_time = time.time() + 300  # 5 minutes expiry
+    # Generate 4-digit OTP
+    otp = random.randint(1000, 9999)
+    expiry_time = time.time() + 120  # 2 minutes expiry
     otp_store[email] = (otp, expiry_time)
 
-    # ✅ Send email
+    # Send OTP via email
     send_mail(
         subject="Your OTP Code",
         message=f"Your OTP code is {otp}. It will expire in 5 minutes.",
@@ -638,53 +641,89 @@ def request_otp(request):
     return Response({"status": True, "message": "OTP sent to your email"})
 
 
-# Verify OTP
+# ✅ STEP 2: Verify OTP (only OTP required)
 @api_view(['POST'])
 def verify_otp_view(request):
-    email = request.data.get("email")
     otp = request.data.get("otp")
 
-    if not all([email, otp]):
-        return Response({"status": False, "message": "Email and OTP required"}, status=400)
+    if not otp:
+        return Response({"status": False, "message": "OTP required"}, status=400)
 
-    if email in otp_store:
-        stored_otp, expiry = otp_store[email]
+    # Loop over stored OTPs
+    for email, (stored_otp, expiry) in list(otp_store.items()):
         if time.time() > expiry:
             del otp_store[email]
-            return Response({"status": False, "message": "OTP expired"}, status=400)
+            continue
 
         if str(stored_otp) == str(otp):
             del otp_store[email]
-            verified_users.add(email)  # ✅ Mark email as verified
-            return Response({"status": True, "message": "OTP verified successfully"})
+
+            # Generate reset token
+            token = str(uuid.uuid4())
+            reset_tokens[token] = email   # map token → email
+
+            return Response({
+                "status": True,
+                "message": "OTP verified successfully",
+                "token": token  # ✅ frontend will use this token in reset password API
+            })
 
     return Response({"status": False, "message": "Invalid OTP"}, status=400)
 
 
-# Reset Password
+# ✅ STEP 3: Reset Password (using token)
 @api_view(['POST'])
-def reset_password(request):
-    email = request.data.get('email')
+def reset_password(request):  
+    token = request.data.get('token')
     new_password = request.data.get('new_password')
     confirm_password = request.data.get('confirm_password')
 
-    # ✅ OTP verify check
-    if email not in verified_users:
-        return Response({'status': False, 'message': 'OTP verification required'}, status=403)
-
-    if not all([email, new_password, confirm_password]):
+    if not all([token, new_password, confirm_password]):
         return Response({'status': False, 'message': 'All fields required'}, status=400)
+
     if new_password != confirm_password:
         return Response({'status': False, 'message': 'Passwords do not match'}, status=400)
+
+    # Validate token
+    email = reset_tokens.get(token)
+    if not email:
+        return Response({'status': False, 'message': 'Invalid or expired token'}, status=403)
 
     user = UserProfile.objects.filter(user_email=email).first()
     if not user:
         return Response({'status': False, 'message': 'User not found'}, status=404)
 
+    # Update password
     user.password = make_password(new_password)
     user.save()
 
-    # ✅ Reset ke baad verified list se hata do
-    verified_users.discard(email)
+    # Remove token after successful reset
+    del reset_tokens[token]
 
     return Response({'status': True, 'message': 'Password updated successfully'}, status=200)
+
+
+# ✅ States API
+@api_view(['GET'])
+def states_api(request):
+    try:
+        states = list(INDIA_STATES_CITIES.keys())
+        return JsonResponse({'status': True, 'states': states}, status=200)
+    except Exception as e:
+        return JsonResponse({'status': False, 'message': str(e)}, status=500)
+
+# ✅ Cities API
+@api_view(['GET'])
+def cities_api(request):
+    try:
+        state_name = request.GET.get('state')
+        if not state_name:
+            return JsonResponse({'status': False, 'message': 'State parameter is required'}, status=400)
+
+        cities = INDIA_STATES_CITIES.get(state_name)
+        if not cities:
+            return JsonResponse({'status': False, 'message': 'Invalid state name'}, status=404)
+
+        return JsonResponse({'status': True, 'state': state_name, 'cities': cities}, status=200)
+    except Exception as e:
+        return JsonResponse({'status': False, 'message': str(e)}, status=500)

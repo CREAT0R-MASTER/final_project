@@ -18,7 +18,7 @@ urlpatterns = [
     path("signup/", views.signup, name="signup"),
     
     path('complaint/create/', views.create_complaint, name='create_complaint'),
-    path("complaint/dropdown/<str:dropdown_type>/", views.dropdown_values, name="dropdown_values"),
+    path("complaint/dropdown/", views.dropdown_common_api, name="dropdown_common_api"),
     path('complaint/status/<str:complaint_code>/', views.complaint_status, name='complaint_status'),
     path('complaint/recent/', views.recent_complaints, name='recent_complaints'),
     path('complaint/recent/<int:complaint_id>/', views.complaint_detail, name='complaint_detail'),
@@ -26,7 +26,10 @@ urlpatterns = [
     path('complaint/nearby/', views.nearby_complaints, name='nearby_complaints'),
 
  # Forgot password flow
-    path('api/request-otp/', views.request_otp, name='request-otp'),
-    path('api/verify-otp/', views.verify_otp_view, name='verify-otp'),
-    path('api/reset-password/', views.reset_password, name='reset-password'),
+    path('complaint/request-otp/', views.request_otp, name='request-otp'),
+    path('complaint/verify-otp/', views.verify_otp_view, name='verify-otp'),
+    path('complaint/reset-password/', views.reset_password, name='reset-password'),
+    
+    path('states/', views.states_api, name='states_api'),
+    path('cities/', views.cities_api, name='cities_api'),
 ]
